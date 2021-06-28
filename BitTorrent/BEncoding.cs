@@ -152,7 +152,7 @@ namespace BitTorrent
             return buffer.ToArray();
         }
 
-        public static void EncodeType(object obj, string path)
+        public static void EncodeToFile(object obj,string path)
         {
             File.WriteAllBytes(path, Encode(obj));
         }
