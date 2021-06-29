@@ -175,11 +175,6 @@ namespace BitTorrent
             return sha1.ComputeHash(data);
         }
 
-        private void HandlePeerListUpdated(object sender, List<IPEndPoint> e)
-        {
-            throw new NotImplementedException();
-        }
-
         public byte[] Read(long start, int length)
         {
             long end = start + length;
@@ -527,6 +522,25 @@ namespace BitTorrent
             torrent.Encoding = Encoding.UTF8;
 
             return torrent;
+        }
+
+        public void UpdatedTrackers(TrackerEvent ev,string id,int port)
+        {
+            foreach (var tracker in Trackers)
+                tracker.Update(this, ev, id, port);
+        }
+
+        public void ResetTrackersLastRequest()
+        {
+            foreach (var tracker in Trackers)
+                tracker.ResetLastRequest();
+        }
+
+        public void HandlePeerListUpdated(object sender,List<IPEndPoint> endPoints) 
+        {
+            var handler = this.PeerListUpdated;
+            if (handler != null)
+                handler(sender, endPoints);
         }
     }
 }

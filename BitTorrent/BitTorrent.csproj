@@ -5,4 +5,8 @@
     <TargetFramework>net5.0</TargetFramework>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="BaseLibS" Version="1.6.4.382" />
+  </ItemGroup>
+
 </Project>
