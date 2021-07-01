@@ -12,12 +12,19 @@ namespace BitTorrent
 {
     public class DataRequest
     {
-
+        public Peer Peer;
+        public int Piece;
+        public int Begin;
+        public int Length;
+        public bool IsCancelled;
     }
 
     public class DataPackage
     {
-
+        public Peer Peer;
+        public int Piece;
+        public int Block;
+        public byte[] Data;
     }
 
     public enum MessageType : int
@@ -129,10 +136,10 @@ namespace BitTorrent
 
             SendHandshake();
             if (IsHandshakeReceived)
-                SentBitfield(Torrent.IsPieceVerified);
+                SendBitfield(Torrent.IsPieceVerified);
         }
 
-        private void Disconnect()
+        public void Disconnect()
         {
             if (!IsDisconnected)
             {
@@ -146,7 +153,7 @@ namespace BitTorrent
                 Disconnected(this, new EventArgs());
         }
 
-        private void SentBytes(byte[] bytes)
+        private void SendBytes(byte[] bytes)
         {
             try
             {
@@ -192,11 +199,6 @@ namespace BitTorrent
             }
         }
 
-        private void HandleMessage(byte[] vs)
-        {
-            throw new NotImplementedException();
-        }
-
         private int GetMessageLength(List<byte> data)
         {
             if (!IsHandshakeReceived)
@@ -206,16 +208,6 @@ namespace BitTorrent
                 return int.MaxValue;
 
             return EndianBitConverter.Big.ToInt32(data.ToArray(), 0) + 4;
-        }
-
-        private void SendHandshake()
-        {
-            throw new NotImplementedException();
-        }
-
-        private void SentBitfield(bool[] isPieceVerified)
-        {
-
         }
 
         public static bool DecodeHandshake(byte[] bytes, out byte[] hash, out string id)
@@ -385,6 +377,444 @@ namespace BitTorrent
             reversed.CopyTo(message, 5);
 
             return message;
+        }
+
+        public static bool DecodeRequest(byte[] bytes, out int index, out int begin, out int length)
+        {
+            index = -1;
+            begin = -1;
+            length = -1;
+
+            if (bytes.Length != 17 || EndianBitConverter.Big.ToInt32(bytes, 0) != 13)
+                return false;
+
+            index = EndianBitConverter.Big.ToInt32(bytes, 5);
+            begin = EndianBitConverter.Big.ToInt32(bytes, 9);
+            length = EndianBitConverter.Big.ToInt32(bytes, 13);
+
+            return true;
+        }
+
+        public static bool DecodePiece(byte[] bytes, out int index, out int begin, out byte[] data)
+        {
+            index = -1;
+            begin = -1;
+            data = new byte[0];
+
+            if (bytes.Length < 13)
+                return false;
+
+            int length = EndianBitConverter.Big.ToInt32(bytes, 0) - 9;
+            index = EndianBitConverter.Big.ToInt32(bytes, 5);
+            begin = EndianBitConverter.Big.ToInt32(bytes, 9);
+
+            data = new byte[length];
+            Buffer.BlockCopy(bytes, 13, data, 0, length);
+
+            return true;
+        }
+
+        public static bool DecodeCancel(byte[] bytes, out int index, out int begin, out int length)
+        {
+            index = -1;
+            begin = -1;
+            length = -1;
+
+            if (bytes.Length != 17 || EndianBitConverter.Big.ToInt32(bytes, 0) != 13)
+                return false;
+
+            index = EndianBitConverter.Big.ToInt32(bytes, 5);
+            begin = EndianBitConverter.Big.ToInt32(bytes, 9);
+            length = EndianBitConverter.Big.ToInt32(bytes, 13);
+
+            return true;
+        }
+
+        public static byte[] EncodeRequest(int index, int begin, int length)
+        {
+            byte[] message = new byte[17];
+            Buffer.BlockCopy(EndianBitConverter.Big.GetBytes(13), 0, message, 0, 4);
+            message[4] = (byte)MessageType.Request;
+            Buffer.BlockCopy(EndianBitConverter.Big.GetBytes(index), 0, message, 5, 4);
+            Buffer.BlockCopy(EndianBitConverter.Big.GetBytes(begin), 0, message, 9, 4);
+            Buffer.BlockCopy(EndianBitConverter.Big.GetBytes(length), 0, message, 13, 4);
+
+            return message;
+        }
+
+        public static byte[] EncodePiece(int index, int begin, byte[] data)
+        {
+            int length = data.Length + 9;
+
+            byte[] message = new byte[length + 4];
+            Buffer.BlockCopy(EndianBitConverter.Big.GetBytes(length), 0, message, 0, 4);
+            message[4] = (byte)MessageType.Piece;
+            Buffer.BlockCopy(EndianBitConverter.Big.GetBytes(index), 0, message, 5, 4);
+            Buffer.BlockCopy(EndianBitConverter.Big.GetBytes(begin), 0, message, 9, 4);
+            Buffer.BlockCopy(data, 0, message, 13, data.Length);
+
+            return message;
+        }
+
+        public static byte[] EncodeCancel(int index, int begin, int length)
+        {
+            byte[] message = new byte[17];
+            Buffer.BlockCopy(EndianBitConverter.Big.GetBytes(13), 0, message, 0, 4);
+            message[4] = (byte)MessageType.Cancel;
+            Buffer.BlockCopy(EndianBitConverter.Big.GetBytes(index), 0, message, 5, 4);
+            Buffer.BlockCopy(EndianBitConverter.Big.GetBytes(begin), 0, message, 9, 4);
+            Buffer.BlockCopy(EndianBitConverter.Big.GetBytes(length), 0, message, 13, 4);
+
+            return message;
+        }
+
+        private void SendHandshake()
+        {
+            if (IsHandshakeSent)
+                return;
+
+            SendBytes(EncodeHandshake(Torrent.Infohash, LocalId));
+            IsHandshakeSent = true;
+        }
+
+        public void SendKeepAlive()
+        {
+            if (LastKeepAlive > DateTime.UtcNow.AddSeconds(-30))
+                return;
+
+            Log.WriteLine(this, "-> keep alive");
+            SendBytes(EncodeKeepAlive());
+            LastKeepAlive = DateTime.UtcNow;
+        }
+
+        public void SendChoke()
+        {
+            if (IsChokeSent)
+                return;
+
+            Log.WriteLine(this, "-> choke");
+            SendBytes(EncodeChoke());
+            IsChokeSent = true;
+        }
+
+        public void SendUnchoke()
+        {
+            if (!IsChokeSent)
+                return;
+
+            Log.WriteLine(this, "-> unchoke");
+            SendBytes(EncodeUnchoke());
+            IsChokeSent = false;
+        }
+
+        public void SendInterested()
+        {
+            if (IsInterestedSent)
+                return;
+
+            Log.WriteLine(this, "-> interested");
+            SendBytes(EncodeInterested());
+            IsInterestedSent = true;
+        }
+
+        public void SendNotInterested()
+        {
+            if (!IsInterestedSent)
+                return;
+
+            Log.WriteLine(this, "-> not interested");
+            SendBytes(EncodeNotInterested());
+            IsInterestedSent = false;
+        }
+
+        public void SendHave(int index)
+        {
+            Log.WriteLine(this, "-> have " + index);
+            SendBytes(EncodeHave(index));
+        }
+
+        public void SendBitfield(bool[] isPieceDownloaded)
+        {
+            Log.WriteLine(this, "-> bitfield " + String.Join("", isPieceDownloaded.Select(x => x ? 1 : 0)));
+            SendBytes(EncodeBitfield(isPieceDownloaded));
+        }
+
+        public void SendRequest(int index, int begin, int length)
+        {
+            Log.WriteLine(this, "-> request " + index + ", " + begin + ", " + length);
+            SendBytes(EncodeRequest(index, begin, length));
+        }
+
+        public void SendPiece(int index, int begin, byte[] data)
+        {
+            Log.WriteLine(this, "-> piece " + index + ", " + begin + ", " + data.Length);
+            SendBytes(EncodePiece(index, begin, data));
+            Uploaded += data.Length;
+        }
+
+        public void SendCancel(int index, int begin, int length)
+        {
+            Log.WriteLine(this, "-> cancel");
+            SendBytes(EncodeCancel(index, begin, length));
+        }
+
+        private MessageType GetMessageType(byte[] bytes)
+        {
+            if (!IsHandshakeReceived)
+                return MessageType.Handshake;
+
+            if (bytes.Length == 4 && EndianBitConverter.Big.ToInt32(bytes, 0) == 0)
+                return MessageType.KeepAlive;
+
+            if (bytes.Length > 4 && Enum.IsDefined(typeof(MessageType), (int)bytes[4]))
+                return (MessageType)bytes[4];
+
+            return MessageType.Unknown;
+        }
+
+        private void HandleMessage(byte[] bytes)
+        {
+            LastActive = DateTime.UtcNow;
+
+            MessageType type = GetMessageType(bytes);
+
+            if (type == MessageType.Unknown)
+                return;
+            else if (type == MessageType.Handshake)
+            {
+                byte[] hash;
+                string id;
+                if (DecodeHandshake(bytes, out hash, out id))
+                {
+                    HandleHandshake(hash, id);
+                    return;
+                }
+            }
+            else if (type == MessageType.KeepAlive && DecodeKeepAlive(bytes))
+            {
+                HandleKeepAlive();
+                return;
+            }
+            else if (type == MessageType.Choke && DecodeChoke(bytes))
+            {
+                HandleChoke();
+                return;
+            }
+            else if (type == MessageType.Unchoke && DecodeUnchoke(bytes))
+            {
+                HandleUnchoke();
+                return;
+            }
+            else if (type == MessageType.Interested && DecodeInterested(bytes))
+            {
+                HandleInterested();
+                return;
+            }
+            else if (type == MessageType.NotInterested && DecodeNotInterested(bytes))
+            {
+                HandleNotInterested();
+                return;
+            }
+            else if (type == MessageType.Have)
+            {
+                int index;
+                if (DecodeHave(bytes, out index))
+                {
+                    HandleHave(index);
+                    return;
+                }
+            }
+            else if (type == MessageType.Bitfield)
+            {
+                bool[] isPieceDownloaded;
+                if (DecodeBitfield(bytes, IsPieceDownloaded.Length, out isPieceDownloaded))
+                {
+                    HandleBitfield(isPieceDownloaded);
+                    return;
+                }
+            }
+            else if (type == MessageType.Request)
+            {
+                int index;
+                int begin;
+                int length;
+                if (DecodeRequest(bytes, out index, out begin, out length))
+                {
+                    HandleRequest(index, begin, length);
+                    return;
+                }
+            }
+            else if (type == MessageType.Piece)
+            {
+                int index;
+                int begin;
+                byte[] data;
+                if (DecodePiece(bytes, out index, out begin, out data))
+                {
+                    HandlePiece(index, begin, data);
+                    return;
+                }
+            }
+            else if (type == MessageType.Cancel)
+            {
+                int index;
+                int begin;
+                int length;
+                if (DecodeCancel(bytes, out index, out begin, out length))
+                {
+                    HandleCancel(index, begin, length);
+                    return;
+                }
+            }
+            else if (type == MessageType.Port)
+            {
+                Log.WriteLine(this, " <- port: " + String.Join("", bytes.Select(x => x.ToString("x2"))));
+                return;
+            }
+
+            Log.WriteLine(this, " Unhandled incoming message " + String.Join("", bytes.Select(x => x.ToString("x2"))));
+            Disconnect();
+        }
+
+        private void HandleHandshake(byte[] hash, string id)
+        {
+            Log.WriteLine(this, "<- handshake");
+
+            if (!Torrent.Infohash.SequenceEqual(hash))
+            {
+                Log.WriteLine(this, "invalid handshake, incorrect torrent hash: expecting=" + Torrent.HexStringInfohash + ", received =" + String.Join("", hash.Select(x => x.ToString("x2"))));
+                Disconnect();
+                return;
+            }
+
+            Id = id;
+
+            IsHandshakeReceived = true;
+            SendBitfield(Torrent.IsPieceVerified);
+        }
+
+        private void HandleKeepAlive()
+        {
+            Log.WriteLine(this, "<- keep alive");
+        }
+
+        private void HandlePort(int port)
+        {
+            Log.WriteLine(this, "<- port");
+        }
+
+        private void HandleChoke()
+        {
+            Log.WriteLine(this, "<- choke");
+            IsChokeReceived = true;
+
+            var handler = StateChanged;
+            if (handler != null)
+                handler(this, new EventArgs());
+        }
+
+        private void HandleUnchoke()
+        {
+            Log.WriteLine(this, "<- unchoke");
+            IsChokeReceived = false;
+
+            var handler = StateChanged;
+            if (handler != null)
+                handler(this, new EventArgs());
+        }
+
+        private void HandleInterested()
+        {
+            Log.WriteLine(this, "<- interested");
+            IsInterestedReceived = true;
+
+            var handler = StateChanged;
+            if (handler != null)
+                handler(this, new EventArgs());
+        }
+
+        private void HandleNotInterested()
+        {
+            Log.WriteLine(this, "<- not interested");
+            IsInterestedReceived = false;
+
+            var handler = StateChanged;
+            if (handler != null)
+                handler(this, new EventArgs());
+        }
+
+        private void HandleHave(int index)
+        {
+            IsPieceDownloaded[index] = true;
+            Log.WriteLine(this, "<- have " + index + " - " + PiecesDownloadedCount + " available (" + PiecesDownloaded + ")");
+
+            var handler = StateChanged;
+            if (handler != null)
+                handler(this, new EventArgs());
+        }
+
+        private void HandleBitfield(bool[] isPieceDownloaded)
+        {
+            for (int i = 0; i < Torrent.PieceCount; i++)
+                isPieceDownloaded[i] = IsPieceDownloaded[i] || isPieceDownloaded[i];
+
+            Log.WriteLine(this, "<- bitfield " + PiecesDownloadedCount + " available (" + PiecesDownloaded + ")");
+
+            var handler = StateChanged;
+            if (handler != null)
+                handler(this, new EventArgs());
+        }
+
+        private void HandleRequest(int index, int begin, int length)
+        {
+            Log.WriteLine(this, "<- request " + index + ", " + begin + ", " + length);
+
+            var handler = BlockRequested;
+            if (handler != null)
+            {
+                handler(this, new DataRequest()
+                {
+                    Peer = this,
+                    Piece = index,
+                    Begin = begin,
+                    Length = length
+                });
+            }
+        }
+
+        private void HandlePiece(int index, int begin, byte[] data)
+        {
+            Log.WriteLine(this, "<- piece " + index + ", " + begin + ", " + data.Length);
+            Downloaded += data.Length;
+
+            var handler = BlockReceived;
+            if (handler != null)
+            {
+                handler(this, new DataPackage()
+                {
+                    Peer = this,
+                    Piece = index,
+                    Block = begin / Torrent.BlockSize,
+                    Data = data
+                });
+            }
+        }
+
+        private void HandleCancel(int index, int begin, int length)
+        {
+            Log.WriteLine(this, " <- cancel");
+
+            var handler = BlockCancelled;
+            if (handler != null)
+            {
+                handler(this, new DataRequest()
+                {
+                    Peer = this,
+                    Piece = index,
+                    Begin = begin,
+                    Length = length
+                });
+            }
         }
     }
 }
