@@ -36,6 +36,12 @@ namespace BitTorrent
         private int isProcessUploads = 0;
         private int isProcessDownloads = 0;
 
+        private ConcurrentQueue<DataRequest> OutgoinfBlocks = new ConcurrentQueue<DataRequest>();
+        private ConcurrentQueue<DataPackage> IncomingBlocks = new ConcurrentQueue<DataPackage>();
+
+        private Throttle uploadThrottle = new Throttle(maxUploadBytesPerSecond, TimeSpan.FromSeconds(1));
+        private Throttle downloadThrottle = new Throttle(maxDownloadBytesPerSecond, TimeSpan.FromSeconds(1));
+
         private Random random = new Random();
 
         public Client(int port, string torrentPath, string downloadPath)
@@ -176,11 +182,31 @@ namespace BitTorrent
         private void AddPeer(Peer peer)
         {
             peer.BlockRequested += HandleBlockRequested;
+            peer.BlockCancelled += HandleBlockCancelled;
+            peer.BlockReceived += HandleBlockReceived;
+            peer.Disconnected += HandlePeerDisconnected;
+            peer.StateChanged += HandlePeerStateChanged;
+
+            peer.Connect();
+
+            if (!Peers.TryAdd(peer.Key, peer))
+                peer.Disconnect();
         }
 
         private void HandlePeerDisconnected(object sender, EventArgs args)
         {
+            Peer peer = sender as Peer;
 
+            peer.BlockRequested -= HandleBlockRequested;
+            peer.BlockCancelled -= HandleBlockCancelled;
+            peer.BlockReceived -= HandleBlockReceived;
+            peer.Disconnected -= HandlePeerDisconnected;
+            peer.StateChanged -= HandlePeerStateChanged;
+
+            Peer tmp;
+            Peers.TryRemove(peer.Key, out tmp);
+            Seeders.TryRemove(peer.Key, out tmp);
+            Leechers.TryRemove(peer.Key, out tmp);
         }
 
         private void HandlePeerStateChanged(object sender, EventArgs args)
@@ -246,6 +272,167 @@ namespace BitTorrent
             }
 
             Interlocked.Exchange(ref isProcessPeers, 0);
+        }
+
+        private void HandleBlockRequested(object sender, DataRequest block)
+        {
+            OutgoinfBlocks.Enqueue(block);
+
+            ProcessUploads();
+        }
+
+        private void HandleBlockCancelled(object sender, DataRequest block)
+        {
+            foreach (var item in OutgoinfBlocks)
+            {
+                if (item.Peer != block.Peer || item.Piece != block.Piece || item.Begin != block.Begin || item.Length != block.Length)
+                    continue;
+
+                item.IsCancelled = true;
+            }
+
+            ProcessUploads();
+        }
+
+        private void ProcessUploads()
+        {
+            if (Interlocked.Exchange(ref isProcessDownloads, 1) == 1)
+                return;
+
+            DataRequest block;
+            while (!uploadThrottle.IsThrottled && OutgoinfBlocks.TryDequeue(out block))
+            {
+                if (block.IsCancelled)
+                    continue;
+
+                if (!Torrent.IsPieceVerified[block.Piece])
+                    continue;
+
+                byte[] data = Torrent.ReadBlock(block.Piece, block.Begin, block.Length);
+                if (data == null)
+                    continue;
+
+                block.Peer.SendPiece(block.Piece, block.Begin, data);
+                uploadThrottle.Add(block.Length);
+                Torrent.Uploaded += block.Length;
+            }
+
+            Interlocked.Exchange(ref isProcessDownloads, 0);
+        }
+
+        private void HandleBlockReceived(object sender, DataPackage args)
+        {
+            IncomingBlocks.Enqueue(args);
+
+            args.Peer.IsBlockRequested[args.Piece][args.Block] = false;
+
+            foreach (var peer in Peers)
+            {
+                if (!peer.Value.IsBlockRequested[args.Piece][args.Block])
+                    continue;
+
+                peer.Value.SendCancel(args.Piece, args.Block * Torrent.BlockSize, Torrent.BlockSize);
+                peer.Value.IsBlockRequested[args.Piece][args.Block] = false;
+            }
+
+            ProcessDownloads();
+        }
+
+        private void ProcessDownloads()
+        {
+            if (Interlocked.Exchange(ref isProcessDownloads, 1) == 1)
+                return;
+
+            DataPackage incomingBlock;
+            while (IncomingBlocks.TryDequeue(out incomingBlock))
+                Torrent.WriteBlock(incomingBlock.Piece, incomingBlock.Block, incomingBlock.Data);
+
+            if (Torrent.IsCompleted)
+            {
+                Interlocked.Exchange(ref isProcessDownloads, 0);
+                return;
+            }
+
+            int[] ranked = GetRankedPieces();
+
+            foreach(var piece in ranked)
+            {
+                if (Torrent.IsPieceVerified[piece])
+                    continue;
+
+                foreach(var peer in GetRankedSeeders())
+                {
+                    if (!peer.IsPieceDownloaded[piece])
+                        continue;
+
+                    // just request blocks in order
+                    for(int block = 0; block < Torrent.GetBlockCount(piece); block++)
+                    {
+                        if (downloadThrottle.IsThrottled)
+                            continue;
+
+                        if (Torrent.IsBlockAcquired[piece][block])
+                            continue;
+
+                        // only request one block from each peer at a time
+                        if (peer.BlocksRequested > 0)
+                            continue;
+
+                        // only request from 1 peer at a time
+                        if (Peers.Count(x => x.Value.IsBlockRequested[piece][block]) > 0)
+                            continue;
+
+                        int size = Torrent.GetBlockSize(piece, block);
+                        peer.SendRequest(piece, block * Torrent.BlockSize, size);
+                        downloadThrottle.Add(size);
+                        peer.IsBlockRequested[piece][block] = true;
+                    }
+                }
+            }
+
+            Interlocked.Exchange(ref isProcessDownloads, 0);
+        }
+
+        private int[] GetRankedPieces()
+        {
+            var indexes = Enumerable.Range(0, Torrent.PieceCount).ToArray();
+            var scores = indexes.Select(x => GetPieceScore(x)).ToArray();
+
+            Array.Sort(scores, indexes);
+            Array.Reverse(indexes);
+
+            return indexes;
+        }
+
+        private double GetPieceScore(int piece)
+        {
+            double progress = GetPieceProgress(piece);
+            double rarity = GetPieceRarity(piece);
+
+            if (progress == 1.0)
+                progress = 0;
+
+            double rand = random.Next(0, 100) / 1000.0;
+
+            return progress + rarity + rand;
+        }
+
+        private double GetPieceProgress(int index)
+        {
+            return Torrent.IsBlockAcquired[index].Average(x => x ? 1.0 : 0.0);
+        }
+
+        private double GetPieceRarity(int index)
+        {
+            if (Peers.Count < 1)
+                return 0.0;
+
+            return Peers.Average(x => x.Value.IsPieceDownloaded[index] ? 0.0 : 1.0);
+        }
+
+        private Peer[] GetRankedSeeders()
+        {
+            return Seeders.Values.OrderBy(x => random.Next(0, 100)).ToArray();
         }
     }
 }
