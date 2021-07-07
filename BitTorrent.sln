@@ -3,7 +3,9 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 16
 VisualStudioVersion = 16.0.31410.357
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BitTorrent", "BitTorrent\BitTorrent.csproj", "{9D5A10C9-C8DD-4222-B52F-6B149D13E044}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "BitTorrent", "BitTorrent\BitTorrent.csproj", "{9D5A10C9-C8DD-4222-B52F-6B149D13E044}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Client", "Client\Client.csproj", "{CFCC5FC0-3C9A-4123-91FA-0C2060064BB9}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -15,6 +17,10 @@ Global
 		{9D5A10C9-C8DD-4222-B52F-6B149D13E044}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{9D5A10C9-C8DD-4222-B52F-6B149D13E044}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{9D5A10C9-C8DD-4222-B52F-6B149D13E044}.Release|Any CPU.Build.0 = Release|Any CPU
+		{CFCC5FC0-3C9A-4123-91FA-0C2060064BB9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CFCC5FC0-3C9A-4123-91FA-0C2060064BB9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CFCC5FC0-3C9A-4123-91FA-0C2060064BB9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CFCC5FC0-3C9A-4123-91FA-0C2060064BB9}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

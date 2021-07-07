@@ -1,14 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>Library</OutputType>
+    <OutputType>Exe</OutputType>
     <TargetFramework>net5.0</TargetFramework>
-    <ApplicationIcon />
-    <StartupObject />
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="BaseLibS" Version="1.6.4.382" />
+    <ProjectReference Include="..\BitTorrent\BitTorrent.csproj" />
   </ItemGroup>
 
 </Project>
